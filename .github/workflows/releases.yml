@@ -1,0 +1,94 @@
+name: Releases
+
+on:
+  push:
+    tags:
+      - v*
+
+jobs:
+  Images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Build images
+        run: |
+          KUBE_BUILD_PLATFORMS=(
+            linux/amd64
+            linux/arm
+            linux/arm64
+            linux/s390x
+            linux/ppc64le
+          )
+          for platform in ${KUBE_BUILD_PLATFORMS[*]} ; do
+            make KUBE_BUILD_HYPERKUBE=n KUBE_BUILD_CONFORMANCE=n KUBE_BUILD_PULL_LATEST_IMAGES=n KUBE_RELEASE_RUN_TESTS=n KUBE_DOCKER_REGISTRY=docker.pkg.github.com/${{ github.repository }} KUBE_BUILD_PLATFORMS="${platform}" release-images || echo "fail ${platform}"
+          done
+      - name: Push images
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login docker.pkg.github.com -u ${{ github.actor }} --password-stdin
+          docker images | grep docker.pkg.github.com/${{ github.repository }} | awk '{print $1":"$2}' | xargs -I {} docker push {}
+
+  Server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Build server binaries
+        run: |   
+          KUBE_BUILD_PLATFORMS=(
+            linux/amd64
+            linux/arm
+            linux/arm64
+            linux/s390x
+            linux/ppc64le
+          )
+          for platform in ${KUBE_BUILD_PLATFORMS[*]} ; do
+            ./build/run.sh make KUBE_BUILD_PLATFORMS="${platform}" kubelet kubeadm || echo "fail ${platform}"
+          done
+
+          targets=$(ls _output/dockerized/bin/*/*/{kubelet,kubeadm})
+
+          mkdir -p release
+          for target in $targets; do
+              dist=$(echo ${target} | sed 's#_output/dockerized/bin/##' | tr '/' '.' )
+              cp $target release/$dist
+          done
+
+      - name: Push server binaries
+        uses: wzshiming/action-upload-release-assets@v1
+        env:
+          GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+          RELEASE: release
+
+  Client:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Build client binaries
+        run: |   
+          KUBE_BUILD_PLATFORMS=(
+            linux/amd64
+            linux/386
+            linux/arm
+            linux/arm64
+            linux/s390x
+            linux/ppc64le
+            darwin/amd64
+            darwin/arm64
+            windows/amd64
+            windows/386
+          )
+          for platform in ${KUBE_BUILD_PLATFORMS[*]} ; do
+            ./build/run.sh make KUBE_BUILD_PLATFORMS="${platform}" kubectl || echo "fail ${platform}"
+          done
+          targets=$(ls _output/dockerized/bin/*/*/kubectl _output/dockerized/bin/windows/*/kubectl.exe)
+
+          mkdir -p release
+          for target in $targets; do
+              dist=$(echo ${target} | sed 's#_output/dockerized/bin/##' | tr '/' '-' )
+              cp $target release/$dist
+          done
+
+      - name: Push client binaries
+        uses: wzshiming/action-upload-release-assets@v1
+        env:
+          GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+          RELEASE: release
